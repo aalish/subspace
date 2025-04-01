@@ -23,8 +23,7 @@ pub struct SubnetParams<T: Config> {
     pub max_allowed_weights: u16,
     pub min_allowed_weights: u16,
     pub max_weight_age: u64,
-    pub name: BoundedVec<u8, ConstU32<256>>,
-    pub metadata: Option<BoundedVec<u8, ConstU32<120>>>,
+    pub metadata: Option<BoundedVec<u8, ConstU32<1024>>>,
     pub tempo: u16,
     pub maximum_set_weight_calls_per_epoch: Option<u16>,
     // --- Consensus ---
@@ -46,7 +45,6 @@ impl<T: Config> DefaultSubnetParams<T> {
     /// Default values are generated from constants defined in the subnet_includes macro.
     pub fn get() -> SubnetParams<T> {
         SubnetParams {
-            name: BoundedVec::default(),
             tempo: TempoDefaultValue::get(),
             immunity_period: ImmunityPeriodDefaultValue::get(),
             min_allowed_weights: MinAllowedWeightsDefaultValue::get(),
@@ -116,8 +114,11 @@ const MIN_SET_WEIGHT_CALLS: u16 = 1;
 const MAX_ENCRYPTION_DURATION: u64 = 10_800 * 2; // 2 days
 
 impl<T: Config> ValidatedSubnetParams<T> {
-    pub fn new(params: SubnetParams<T>, netuid: Option<u16>) -> Result<Self, DispatchError> {
-        Self::validate(netuid, &params)?;
+    pub fn new(
+        params: SubnetParams<T>,
+        net_key: Option<T::AccountId>,
+    ) -> Result<Self, DispatchError> {
+        Self::validate(net_key, &params)?;
         Ok(Self {
             inner: params,
             _validated: PhantomData,
@@ -129,7 +130,7 @@ impl<T: Config> ValidatedSubnetParams<T> {
     }
 
     #[deny(unused_variables)]
-    fn validate(netuid: Option<u16>, params: &SubnetParams<T>) -> DispatchResult {
+    fn validate(net_key: Option<T::AccountId>, params: &SubnetParams<T>) -> DispatchResult {
         let global_params = Pallet::<T>::global_params();
 
         // ! Keep It Written Like This To Enhance Safety Of Unused
@@ -142,7 +143,6 @@ impl<T: Config> ValidatedSubnetParams<T> {
             max_allowed_weights,
             min_allowed_weights,
             max_weight_age,
-            name,
             metadata,
             tempo,
             maximum_set_weight_calls_per_epoch,
@@ -208,7 +208,7 @@ impl<T: Config> ValidatedSubnetParams<T> {
         );
 
         ensure!(
-            netuid.map_or(true, |netuid| *max_allowed_uids >= N::<T>::get(netuid)),
+            net_key.map_or(true, |net_key| *max_allowed_uids >= N::<T>::get(net_key)),
             Error::<T>::InvalidMaxAllowedUids
         );
 
@@ -246,20 +246,6 @@ impl<T: Config> ValidatedSubnetParams<T> {
             );
         }
 
-        // Validate subnet name
-        match Pallet::<T>::get_netuid_for_name(name) {
-            Some(id) if netuid.is_some_and(|netuid| netuid == id) => { /* subnet kept same name */ }
-            Some(_) => return Err(Error::<T>::SubnetNameAlreadyExists.into()),
-            None => {
-                let min = MinNameLength::<T>::get() as usize;
-                let max = MaxNameLength::<T>::get() as usize;
-                ensure!(!name.is_empty(), Error::<T>::InvalidSubnetName);
-                ensure!(name.len() >= min, Error::<T>::SubnetNameTooShort);
-                ensure!(name.len() <= max, Error::<T>::SubnetNameTooLong);
-                core::str::from_utf8(name).map_err(|_| Error::<T>::InvalidSubnetName)?;
-            }
-        }
-
         Ok(())
     }
 }
@@ -276,15 +262,15 @@ impl<T: Config> SubnetChangeset<T> {
         })
     }
 
-    pub fn update(netuid: u16, params: SubnetParams<T>) -> Result<Self, DispatchError> {
+    pub fn update(net_key: &T::AccountId, params: SubnetParams<T>) -> Result<Self, DispatchError> {
         Ok(Self {
-            params: ValidatedSubnetParams::new(params, Some(netuid))?,
+            params: ValidatedSubnetParams::new(params, Some(net_key.clone()))?,
             _validated: PhantomData,
         })
     }
 
     #[deny(unused_variables)]
-    pub fn apply(self, netuid: u16) -> DispatchResult {
+    pub fn apply(self, net_key: &T::AccountId) -> DispatchResult {
         let SubnetParams {
             founder,
             founder_share,
@@ -294,7 +280,6 @@ impl<T: Config> SubnetChangeset<T> {
             max_allowed_weights,
             min_allowed_weights,
             max_weight_age,
-            name,
             metadata,
             tempo,
             maximum_set_weight_calls_per_epoch,
@@ -308,68 +293,66 @@ impl<T: Config> SubnetChangeset<T> {
             max_encryption_period,
         } = self.params.into_inner();
 
-        Pallet::<T>::set_max_allowed_uids(netuid, max_allowed_uids)?;
-        SubnetNames::<T>::insert(netuid, name.into_inner());
-        Founder::<T>::insert(netuid, &founder);
-        FounderShare::<T>::insert(netuid, founder_share);
-        Tempo::<T>::insert(netuid, tempo);
-        ImmunityPeriod::<T>::insert(netuid, immunity_period);
-        MaxAllowedWeights::<T>::insert(netuid, max_allowed_weights);
-        MaxWeightAge::<T>::insert(netuid, max_weight_age);
-        MinAllowedWeights::<T>::insert(netuid, min_allowed_weights);
-        IncentiveRatio::<T>::insert(netuid, incentive_ratio);
-        BondsMovingAverage::<T>::insert(netuid, bonds_ma);
-        module_burn_config.apply_module_burn(netuid)?;
-        MinValidatorStake::<T>::insert(netuid, min_validator_stake);
+        Pallet::<T>::set_max_allowed_uids(net_key, max_allowed_uids)?;
+        Founder::<T>::insert(net_key, &founder);
+        FounderShare::<T>::insert(net_key, founder_share);
+        Tempo::<T>::insert(net_key, tempo);
+        ImmunityPeriod::<T>::insert(net_key, immunity_period);
+        MaxAllowedWeights::<T>::insert(net_key, max_allowed_weights);
+        MaxWeightAge::<T>::insert(net_key, max_weight_age);
+        MinAllowedWeights::<T>::insert(net_key, min_allowed_weights);
+        IncentiveRatio::<T>::insert(net_key, incentive_ratio);
+        BondsMovingAverage::<T>::insert(net_key, bonds_ma);
+        module_burn_config.apply_module_burn(net_key)?;
+        MinValidatorStake::<T>::insert(net_key, min_validator_stake);
         if let Some(max_calls) = maximum_set_weight_calls_per_epoch {
             if max_calls == 0 {
-                MaximumSetWeightCallsPerEpoch::<T>::remove(netuid);
+                MaximumSetWeightCallsPerEpoch::<T>::remove(net_key);
             } else {
-                MaximumSetWeightCallsPerEpoch::<T>::insert(netuid, max_calls);
+                MaximumSetWeightCallsPerEpoch::<T>::insert(net_key, max_calls);
             }
         }
-        T::update_subnet_governance_configuration(netuid, governance_config)?;
+        T::update_subnet_governance_configuration(net_key, governance_config)?;
         if let Some(meta) = &metadata {
-            SubnetMetadata::<T>::insert(netuid, meta);
+            SubnetMetadata::<T>::insert(net_key, meta);
         }
-        MaxAllowedValidators::<T>::insert(netuid, max_allowed_validators);
-        MaxEncryptionPeriod::<T>::insert(netuid, max_encryption_period);
-        UseWeightsEncryption::<T>::insert(netuid, use_weights_encryption);
-        CopierMargin::<T>::insert(netuid, copier_margin);
+        MaxAllowedValidators::<T>::insert(net_key, max_allowed_validators);
+        MaxEncryptionPeriod::<T>::insert(net_key, max_encryption_period);
+        UseWeightsEncryption::<T>::insert(net_key, use_weights_encryption);
+        CopierMargin::<T>::insert(net_key, copier_margin);
 
-        Pallet::<T>::deposit_event(Event::SubnetParamsUpdated(netuid));
+        Pallet::<T>::deposit_event(Event::SubnetParamsUpdated(net_key.clone()));
 
         Ok(())
     }
 }
 
 impl<T: Config> Pallet<T> {
-    pub fn subnet_params(netuid: u16) -> SubnetParams<T> {
+    pub fn subnet_params(net_key: &T::AccountId) -> SubnetParams<T> {
         SubnetParams {
-            founder: Founder::<T>::get(netuid),
-            founder_share: FounderShare::<T>::get(netuid),
-            tempo: Tempo::<T>::get(netuid),
-            immunity_period: ImmunityPeriod::<T>::get(netuid),
-            max_allowed_weights: MaxAllowedWeights::<T>::get(netuid),
-            max_allowed_uids: MaxAllowedUids::<T>::get(netuid),
-            max_weight_age: MaxWeightAge::<T>::get(netuid),
-            min_allowed_weights: MinAllowedWeights::<T>::get(netuid),
-            name: BoundedVec::truncate_from(SubnetNames::<T>::get(netuid)),
-            incentive_ratio: IncentiveRatio::<T>::get(netuid),
-            maximum_set_weight_calls_per_epoch: MaximumSetWeightCallsPerEpoch::<T>::get(netuid),
-            bonds_ma: BondsMovingAverage::<T>::get(netuid),
+            founder: Founder::<T>::get(net_key),
+            founder_share: FounderShare::<T>::get(net_key),
+            tempo: Tempo::<T>::get(net_key),
+            immunity_period: ImmunityPeriod::<T>::get(net_key),
+            max_allowed_weights: MaxAllowedWeights::<T>::get(net_key),
+            max_allowed_uids: MaxAllowedUids::<T>::get(net_key),
+            max_weight_age: MaxWeightAge::<T>::get(net_key),
+            min_allowed_weights: MinAllowedWeights::<T>::get(net_key),
+            incentive_ratio: IncentiveRatio::<T>::get(net_key),
+            maximum_set_weight_calls_per_epoch: MaximumSetWeightCallsPerEpoch::<T>::get(net_key),
+            bonds_ma: BondsMovingAverage::<T>::get(net_key),
 
             // --- Registrations ---
-            module_burn_config: ModuleBurnConfig::<T>::get(netuid),
-            min_validator_stake: MinValidatorStake::<T>::get(netuid),
-            max_allowed_validators: MaxAllowedValidators::<T>::get(netuid),
-            governance_config: T::get_subnet_governance_configuration(netuid),
-            metadata: SubnetMetadata::<T>::get(netuid),
+            module_burn_config: ModuleBurnConfig::<T>::get(net_key),
+            min_validator_stake: MinValidatorStake::<T>::get(net_key),
+            max_allowed_validators: MaxAllowedValidators::<T>::get(net_key),
+            governance_config: T::get_subnet_governance_configuration(net_key),
+            metadata: SubnetMetadata::<T>::get(net_key),
 
             // --- Weight Encryption ---
-            use_weights_encryption: UseWeightsEncryption::<T>::get(netuid),
-            copier_margin: CopierMargin::<T>::get(netuid),
-            max_encryption_period: MaxEncryptionPeriod::<T>::get(netuid),
+            use_weights_encryption: UseWeightsEncryption::<T>::get(net_key),
+            copier_margin: CopierMargin::<T>::get(net_key),
+            max_encryption_period: MaxEncryptionPeriod::<T>::get(net_key),
         }
     }
 }

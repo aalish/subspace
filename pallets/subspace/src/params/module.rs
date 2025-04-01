@@ -4,8 +4,6 @@ use scale_info::TypeInfo;
 #[derive(Decode, Encode, PartialEq, Eq, Clone, Debug, TypeInfo)]
 #[scale_info(skip_type_params(T))]
 pub struct ModuleParams<T: Config> {
-    pub name: Vec<u8>,
-    pub address: Vec<u8>,
     pub fees: ValidatorFees,
     pub metadata: Option<Vec<u8>>,
     pub _pd: PhantomData<T>,
@@ -13,8 +11,6 @@ pub struct ModuleParams<T: Config> {
 
 #[derive(Debug)]
 pub struct ModuleChangeset<T: Config> {
-    pub name: Option<Vec<u8>>,
-    pub address: Option<Vec<u8>>,
     pub fees: Option<ValidatorFees>,
     pub metadata: Option<Vec<u8>>,
     pub _pd: PhantomData<T>,
@@ -22,15 +18,8 @@ pub struct ModuleChangeset<T: Config> {
 
 impl<T: Config> ModuleChangeset<T> {
     #[must_use]
-    pub fn new(
-        name: Vec<u8>,
-        address: Vec<u8>,
-        fees: ValidatorFees,
-        metadata: Option<Vec<u8>>,
-    ) -> Self {
+    pub fn new(fees: ValidatorFees, metadata: Option<Vec<u8>>) -> Self {
         Self {
-            name: Some(name),
-            address: Some(address),
             fees: Some(fees),
             metadata,
             _pd: PhantomData,
@@ -41,22 +30,16 @@ impl<T: Config> ModuleChangeset<T> {
     #[must_use]
     pub fn update(
         params: &ModuleParams<T>,
-        name: Vec<u8>,
-        address: Vec<u8>,
         fees: Option<ValidatorFees>,
         metadata: Option<Vec<u8>>,
     ) -> Self {
         let ModuleParams {
-            name: old_name,
-            address: old_address,
             fees: _,
             metadata: _,
             _pd: _,
         } = params;
 
         Self {
-            name: (name != *old_name).then_some(name),
-            address: (address != *old_address).then_some(address),
             fees,
             metadata,
             _pd: PhantomData,
@@ -64,26 +47,12 @@ impl<T: Config> ModuleChangeset<T> {
     }
 
     #[deny(unused_variables)]
-    pub fn validate(&self, netuid: u16) -> Result<(), sp_runtime::DispatchError> {
+    pub fn validate(&self) -> Result<(), sp_runtime::DispatchError> {
         let Self {
-            name,
-            address,
             fees,
             metadata,
             _pd: _,
         } = self;
-
-        let max_length = MaxNameLength::<T>::get() as usize;
-        let min_length = MinNameLength::<T>::get() as usize;
-
-        if let Some(name) = name {
-            ModuleValidator::validate_name::<T>(name, min_length, max_length, netuid)?;
-        }
-
-        if let Some(address) = address {
-            ModuleValidator::validate_address::<T>(address, max_length)?;
-        }
-
         if let Some(fees) = fees {
             ModuleValidator::validate_fees::<T>(fees)?;
         }
@@ -98,37 +67,26 @@ impl<T: Config> ModuleChangeset<T> {
     #[deny(unused_variables)]
     pub fn apply(
         self,
-        netuid: u16,
-        key: T::AccountId,
-        uid: u16,
+        net_key: &T::AccountId,
+        mod_key: T::AccountId,
     ) -> Result<(), sp_runtime::DispatchError> {
-        self.validate(netuid)?;
+        self.validate()?;
 
         let Self {
-            name,
-            address,
             fees,
             metadata,
             _pd: _,
         } = self;
 
-        if let Some(new_name) = name {
-            Name::<T>::insert(netuid, uid, new_name);
-        }
-
-        if let Some(new_address) = address {
-            Address::<T>::insert(netuid, uid, new_address);
-        }
-
         if let Some(new_fees) = fees {
-            ValidatorFeeConfig::<T>::insert(&key, new_fees);
+            ValidatorFeeConfig::<T>::insert(&mod_key, new_fees);
         }
 
         if let Some(new_metadata) = metadata {
-            Metadata::<T>::insert(netuid, &key, new_metadata);
+            Metadata::<T>::insert(net_key, &mod_key, new_metadata);
         }
 
-        Pallet::<T>::deposit_event(Event::ModuleUpdated(netuid, key));
+        Pallet::<T>::deposit_event(Event::ModuleUpdated(net_key.clone(), mod_key));
         Ok(())
     }
 }
@@ -136,36 +94,6 @@ impl<T: Config> ModuleChangeset<T> {
 pub struct ModuleValidator;
 
 impl ModuleValidator {
-    pub fn validate_name<T: Config>(
-        name: &[u8],
-        min_length: usize,
-        max_length: usize,
-        netuid: u16,
-    ) -> Result<(), sp_runtime::DispatchError> {
-        ensure!(!name.is_empty(), Error::<T>::InvalidModuleName);
-        ensure!(name.len() <= max_length, Error::<T>::ModuleNameTooLong);
-        ensure!(name.len() >= min_length, Error::<T>::ModuleNameTooShort);
-        core::str::from_utf8(name).map_err(|_| Error::<T>::InvalidModuleName)?;
-        ensure!(
-            !Name::<T>::iter_prefix_values(netuid).any(|existing| existing == name),
-            Error::<T>::ModuleNameAlreadyExists
-        );
-        Ok(())
-    }
-
-    pub fn validate_address<T: Config>(
-        address: &[u8],
-        max_length: usize,
-    ) -> Result<(), sp_runtime::DispatchError> {
-        ensure!(!address.is_empty(), Error::<T>::InvalidModuleAddress);
-        ensure!(
-            address.len() <= max_length,
-            Error::<T>::ModuleAddressTooLong
-        );
-        core::str::from_utf8(address).map_err(|_| Error::<T>::InvalidModuleAddress)?;
-        Ok(())
-    }
-
     pub fn validate_metadata<T: Config>(metadata: &[u8]) -> Result<(), sp_runtime::DispatchError> {
         ensure!(!metadata.is_empty(), Error::<T>::InvalidModuleMetadata);
         ensure!(metadata.len() <= 120, Error::<T>::ModuleMetadataTooLong);
@@ -180,12 +108,10 @@ impl ModuleValidator {
 }
 
 impl<T: Config> Pallet<T> {
-    pub fn module_params(netuid: u16, key: &T::AccountId, uid: u16) -> ModuleParams<T> {
+    pub fn module_params(net_key: &T::AccountId, key: &T::AccountId) -> ModuleParams<T> {
         ModuleParams {
-            name: Name::<T>::get(netuid, uid),
-            address: Address::<T>::get(netuid, uid),
             fees: ValidatorFeeConfig::<T>::get(key),
-            metadata: Metadata::<T>::get(netuid, key),
+            metadata: Metadata::<T>::get(net_key, key),
             _pd: PhantomData,
         }
     }

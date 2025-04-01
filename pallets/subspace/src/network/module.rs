@@ -17,56 +17,48 @@ impl<T: Config> Pallet<T> {
     }
 
     pub fn append_module(
-        netuid: u16,
-        key: &T::AccountId,
+        net_key: &T::AccountId,
+        mod_key: &T::AccountId,
         changeset: ModuleChangeset<T>,
     ) -> Result<u16, sp_runtime::DispatchError> {
         // --- Get The Next Uid ---
-        let uid: u16 = N::<T>::get(netuid);
-        log::debug!("append_module( netuid: {netuid:?} | uid: {key:?} | new_key: {uid:?})");
+        let uid: u16 = N::<T>::get(net_key);
+        log::debug!("append_module( net_key: {net_key:?} | mod_key: {mod_key:?})");
 
         // -- Initialize All Storages ---
-        StorageHandler::initialize_all::<T>(netuid, uid, key)?;
+        StorageHandler::initialize_all::<T>(net_key, mod_key)?;
         // Make sure this overwrites the defaults (keep it second)
-        changeset.apply(netuid, key.clone(), uid)?;
+        changeset.apply(net_key, mod_key.clone())?;
 
         // --- Update The Network Module Size ---
-        N::<T>::mutate(netuid, |n| *n = n.saturating_add(1));
+        N::<T>::mutate(net_key, |n| *n = n.saturating_add(1));
 
         // --- Initilaize Stake Storage ---
-        Self::increase_stake(key, key, 0);
+        Self::increase_stake(mod_key, mod_key, 0);
 
         Ok(uid)
     }
 
     /// Replace the module under this uid.
     pub fn remove_module(
-        netuid: u16,
-        uid: u16,
+        net_key: &T::AccountId,
+        mod_key: &T::AccountId,
         deregister_subnet_if_empty: bool,
     ) -> DispatchResult {
         // 1. Check if network has any modules
-        let n = N::<T>::get(netuid);
+        let n = N::<T>::get(mod_key);
         if n == 0 {
             return Ok(());
         }
 
-        // --- Get the keys for the current and replacement positions ---
-        let module_key: T::AccountId =
-            Keys::<T>::get(netuid, uid).ok_or(Error::<T>::ModuleDoesNotExist)?;
-        let replace_uid = n.saturating_sub(1);
-        let replace_key: T::AccountId =
-            Keys::<T>::get(netuid, replace_uid).expect("this is infallible");
-
         log::debug!(
-            "remove_module( netuid: {:?} | uid : {:?} | key: {:?} ) ",
-            netuid,
-            uid,
-            module_key
+            "remove_module( net_key: {:?} | mod_key : {:?} ) ",
+            net_key,
+            mod_key
         );
 
         // --- Remove All Module Related Storage ---
-        StorageHandler::remove_all::<T>(netuid, uid, replace_uid, &module_key, &replace_key)?;
+        StorageHandler::remove_all::<T>(net_key, mod_key)?;
         <T as SubnetEmissionApi<T::AccountId>>::clear_module_includes(
             netuid,
             uid,

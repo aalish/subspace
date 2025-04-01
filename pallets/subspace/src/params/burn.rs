@@ -71,7 +71,7 @@ impl<T: Config> GeneralBurnConfiguration<T> {
     }
 
     #[deny(unused_variables)]
-    pub fn apply_module_burn(self, netuid: u16) -> Result<(), DispatchError> {
+    pub fn apply_module_burn(self, net_key: &T::AccountId) -> Result<(), DispatchError> {
         let Self {
             min_burn,
             max_burn,
@@ -105,7 +105,7 @@ impl<T: Config> GeneralBurnConfiguration<T> {
             Error::<T>::InvalidMaxRegistrationsPerInterval
         );
 
-        ModuleBurnConfig::<T>::set(netuid, self);
+        ModuleBurnConfig::<T>::set(net_key, self);
 
         Ok(())
     }

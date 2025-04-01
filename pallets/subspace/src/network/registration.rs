@@ -9,16 +9,12 @@ use sp_runtime::BoundedVec;
 use substrate_fixed::types::I110F18;
 
 impl<T: Config> Pallet<T> {
-    /// Default Rootnetwork subnet id
-    const ROOTNET_ID: u16 = 0;
     /// Registers a module in a subnet.
     ///
     /// # Arguments
     ///
     /// * `origin` - The origin of the call, must be a signed account.
-    /// * `network_name` - The name of the subnet to register in.
-    /// * `name` - The name of the module.
-    /// * `address` - The address of the module.
+    /// * `net_key` - The key of the subnet to register in.
     /// * `stake` - The amount of stake to register with.
     /// * `module_key` - The account ID of the module.
     /// * `metadata` - Optional metadata for the module.
@@ -30,7 +26,6 @@ impl<T: Config> Pallet<T> {
     /// * The caller's signature is invalid.
     /// * The maximum number of registrations per block has been reached.
     /// * The caller doesn't have enough balance to register.
-    /// * The subnet name is too long when creating a new subnet.
     /// * The maximum number of registrations per interval has been reached.
     /// * The stake is insufficient for registration.
     /// * The module key is already registered.
@@ -48,9 +43,7 @@ impl<T: Config> Pallet<T> {
     /// 5. Emit a `ModuleRegistered` event.
     pub fn do_register(
         origin: T::RuntimeOrigin,
-        network_name: Vec<u8>,
-        name: Vec<u8>,
-        address: Vec<u8>,
+        net_key: T::AccountId,
         module_key: T::AccountId,
         metadata: Option<Vec<u8>>,
     ) -> DispatchResult {
@@ -61,34 +54,32 @@ impl<T: Config> Pallet<T> {
             Error::<T>::TooManyRegistrationsPerBlock
         );
 
-        let netuid =
-            Self::get_netuid_for_name(&network_name).ok_or(Error::<T>::NetworkDoesNotExist)?;
+        ensure!(
+            Self::check_net_key(&net_key),
+            Error::<T>::NetworkDoesNotExist
+        );
 
-        Self::validate_registration_request(netuid, &key, &module_key)?;
+        Self::validate_registration_request(&net_key, &key, &module_key)?;
 
-        Self::reserve_module_slot(netuid, &module_key)?;
+        Self::reserve_module_slot(&net_key, &module_key)?;
 
-        let uid = Self::register_module(netuid, &module_key, name, address, metadata)?;
-        Self::finalize_registration(netuid, uid, &module_key)?;
+        let _ = Self::register_module(&net_key, &module_key, metadata)?;
+        Self::finalize_registration(&net_key, &module_key)?;
 
         Ok(())
     }
 
     pub fn do_register_subnet(
         origin: T::RuntimeOrigin,
-        network_name: Vec<u8>,
         network_metadata: Option<Vec<u8>>,
     ) -> DispatchResult {
         let key = ensure_signed(origin.clone())?;
 
-        if Self::get_netuid_for_name(&network_name).is_some() {
-            return Err(Error::<T>::SubnetNameAlreadyExists.into());
-        }
+        // if Self::get_netuid_for_name(&network_name).is_some() {
+        //     return Err(Error::<T>::SubnetNameAlreadyExists.into());
+        // }
 
-        let bounded_name: BoundedVec<u8, ConstU32<256>> =
-            network_name.to_vec().try_into().map_err(|_| Error::<T>::SubnetNameTooLong)?;
-
-        let network_metadata: Option<BoundedVec<u8, ConstU32<120>>> = match network_metadata {
+        let network_metadata: Option<BoundedVec<u8, ConstU32<1024>>> = match network_metadata {
             Some(slice) => {
                 Some(slice.to_vec().try_into().map_err(|_| Error::<T>::SubnetNameTooLong)?)
             }
@@ -96,7 +87,6 @@ impl<T: Config> Pallet<T> {
         };
 
         let params = SubnetParams {
-            name: bounded_name,
             metadata: network_metadata,
             founder: key.clone(),
             ..DefaultSubnetParams::<T>::get()
@@ -110,7 +100,7 @@ impl<T: Config> Pallet<T> {
         )
         .map_err(|_| Error::<T>::NotEnoughBalanceToRegisterSubnet)?;
 
-        Self::add_subnet_from_registration(changeset)
+        Self::add_subnet_from_registration(changeset, &key)
     }
 
     /// Deregisters a module from the specified subnet.
@@ -135,22 +125,22 @@ impl<T: Config> Pallet<T> {
     /// # Events
     ///
     /// Emits a `ModuleDeregistered` event when successful.
-    pub fn do_deregister(origin: T::RuntimeOrigin, netuid: u16) -> DispatchResult {
+    pub fn do_deregister(origin: T::RuntimeOrigin, net_key: T::AccountId) -> DispatchResult {
         // --- 1. Check that the caller has signed the transaction.
         let key = ensure_signed(origin)?;
         // --- 2. Check that the module exists in the subnet.
-        let Some(uid) = Self::get_uid_for_key(netuid, &key) else {
+        if NetModules::<T>::get(&net_key).contains(&key) {
             return Err(Error::<T>::ModuleDoesNotExist.into());
         };
         // --- 3. Remove the module from the subnet.
-        Self::remove_module(netuid, uid, true)?;
+        Self::remove_module(&net_key, &key, true)?;
         ensure!(
-            !Self::key_registered(netuid, &key),
+            !Self::key_registered(&net_key, &key),
             Error::<T>::StillRegistered
         );
 
         // --- 4. Deposit the event
-        Self::deposit_event(Event::ModuleDeregistered(netuid, uid, key));
+        Self::deposit_event(Event::ModuleDeregistered(net_key, key));
         // --- 5. Ok and done.
         Ok(())
     }
@@ -160,30 +150,32 @@ impl<T: Config> Pallet<T> {
     // --------------------------
 
     fn validate_registration_request(
-        netuid: u16,
+        net_key: &T::AccountId,
         key: &T::AccountId,
         module_key: &T::AccountId,
     ) -> DispatchResult {
-        let burn_config = ModuleBurnConfig::<T>::get(netuid);
+        let burn_config = ModuleBurnConfig::<T>::get(net_key);
         ensure!(
-            RegistrationsThisInterval::<T>::get(netuid)
+            RegistrationsThisInterval::<T>::get(net_key)
                 < burn_config.max_registrations_per_interval,
             Error::<T>::TooManyRegistrationsPerInterval
         );
 
-        if MaxAllowedUids::<T>::get(netuid) < 1 {
+        if MaxAllowedUids::<T>::get(net_key) < 1 {
             return Err(Error::<T>::NetworkIsImmuned.into());
         }
 
         ensure!(
-            !Self::key_registered(netuid, module_key),
+            !Self::key_registered(net_key, module_key),
             Error::<T>::KeyAlreadyRegistered
         );
 
-        let rootnet_id = T::get_consensus_netuid(SubnetConsensus::Root).unwrap_or(Self::ROOTNET_ID);
-        if netuid != rootnet_id {
+        let rootnet_key = T::get_consensus_net_key(SubnetConsensus::Root).unwrap_or(
+            T::AccountId::decode(&mut sp_runtime::traits::TrailingZeroInput::zeroes()).unwrap(),
+        );
+        if *net_key != rootnet_key {
             let burn =
-                Self::u64_to_balance(Burn::<T>::get(netuid)).ok_or(Error::<T>::ArithmeticError)?;
+                Self::u64_to_balance(Burn::<T>::get(net_key)).ok_or(Error::<T>::ArithmeticError)?;
             Self::remove_balance_from_account(key, burn)
                 .map_err(|_| Error::<T>::NotEnoughBalanceToRegister)?;
         }
@@ -192,29 +184,27 @@ impl<T: Config> Pallet<T> {
     }
 
     fn register_module(
-        netuid: u16,
-        module_key: &T::AccountId,
-        name: Vec<u8>,
-        address: Vec<u8>,
+        net_key: &T::AccountId,
+        mod_key: &T::AccountId,
         metadata: Option<Vec<u8>>,
     ) -> Result<u16, DispatchError> {
         let fees = DefaultValidatorFees::<T>::get();
-        let module_changeset = ModuleChangeset::new(name, address, fees, metadata);
-        Self::append_module(netuid, module_key, module_changeset)
+        let module_changeset = ModuleChangeset::new(fees, metadata);
+        Self::append_module(net_key, mod_key, module_changeset)
     }
 
-    fn finalize_registration(netuid: u16, uid: u16, module_key: &T::AccountId) -> DispatchResult {
+    fn finalize_registration(net_key: &T::AccountId, module_key: &T::AccountId) -> DispatchResult {
         ensure!(
-            Self::key_registered(netuid, module_key),
+            Self::key_registered(net_key, module_key),
             Error::<T>::ModuleDoesNotExist
         );
 
         RegistrationsPerBlock::<T>::mutate(|val| *val = val.saturating_add(1));
-        RegistrationsThisInterval::<T>::mutate(netuid, |registrations| {
+        RegistrationsThisInterval::<T>::mutate(net_key, |registrations| {
             *registrations = registrations.saturating_add(1);
         });
 
-        Self::deposit_event(Event::ModuleRegistered(netuid, uid, module_key.clone()));
+        Self::deposit_event(Event::ModuleRegistered(net_key.clone(), module_key.clone()));
 
         Ok(())
     }
@@ -242,34 +232,37 @@ impl<T: Config> Pallet<T> {
     ///
     /// When `ignore_immunity` is true (e.g., during global deregistration), the function
     /// disregards the immunity period and considers all peers for pruning.
-    pub fn get_lowest_uid(netuid: u16, ignore_immunity: bool) -> Option<u16> {
+    pub fn get_lowest_mod_key(
+        net_key: &T::AccountId,
+        ignore_immunity: bool,
+    ) -> Option<T::AccountId> {
         let current_block = Self::get_current_block_number();
-        let immunity_period = ImmunityPeriod::<T>::get(netuid) as u64;
-        let emission_vec = Emission::<T>::get(netuid);
-        let dividend_vec = Dividends::<T>::get(netuid);
-        let incentive_vec = Incentive::<T>::get(netuid);
+        let immunity_period = ImmunityPeriod::<T>::get(net_key) as u64;
+        let emissions = Emission::<T>::get(net_key);
+        let dividends = Dividends::<T>::get(net_key);
+        let incentives = Incentive::<T>::get(net_key);
 
-        let uids: Vec<_> = RegistrationBlock::<T>::iter_prefix(netuid)
-            .filter(move |&(uid, block_at_registration)| {
+        let mod_keys: Vec<_> = RegistrationBlock::<T>::iter_prefix(net_key)
+            .filter(|(mod_key, block_at_registration)| {
                 if ignore_immunity
-                    || current_block.saturating_sub(block_at_registration) >= immunity_period
+                    || current_block.saturating_sub(*block_at_registration) >= immunity_period
                 {
-                    !*ValidatorPermits::<T>::get(netuid).get(uid as usize).unwrap_or(&false)
+                    !*ValidatorPermits::<T>::get(net_key).get(&mod_key).unwrap_or(&false)
                 } else {
                     false
                 }
             })
-            .map(|(uid, block_at_registration)| {
+            .map(|(mod_key, block_at_registration)| {
                 let emission =
-                    I110F18::from_num(emission_vec.get(uid as usize).copied().unwrap_or_default());
+                    I110F18::from_num(emissions.get(&mod_key).copied().unwrap_or_default());
 
                 let dividend_perc =
-                    I110F18::from_num(dividend_vec.get(uid as usize).copied().unwrap_or_default());
+                    I110F18::from_num(dividends.get(&mod_key).copied().unwrap_or_default());
                 let incentive_perc =
-                    I110F18::from_num(incentive_vec.get(uid as usize).copied().unwrap_or_default());
+                    I110F18::from_num(incentives.get(&mod_key).copied().unwrap_or_default());
 
                 if dividend_perc == 0 && incentive_perc == 0 {
-                    return (uid, I110F18::from_num(0), block_at_registration);
+                    return (mod_key, I110F18::from_num(0), block_at_registration);
                 }
 
                 let dividend = dividend_perc
@@ -281,43 +274,44 @@ impl<T: Config> Pallet<T> {
 
                 let pruning_score =
                     (I110F18::from_num(0.3).saturating_mul(dividend)).saturating_add(incentive);
-                (uid, pruning_score, block_at_registration)
+                (mod_key, pruning_score, block_at_registration)
             })
             .collect();
 
         // Age is secondary to the emission.
-        uids.iter()
+        mod_keys
+            .iter()
             // This is usual scenario, that is why we check for oldest 0 emission to return early
             .filter(|&(_, pruning_score, _)| *pruning_score == 0)
             .min_by_key(|&(_, _, block_at_registration)| block_at_registration)
             .or_else(|| {
-                uids.iter().min_by(|&(_, score_a, block_a), &(_, score_b, block_b)| {
+                mod_keys.iter().min_by(|&(_, score_a, block_a), &(_, score_b, block_b)| {
                     score_a.cmp(score_b).then_with(|| block_a.cmp(block_b))
                 })
             })
-            .map(|(uid, _, _)| *uid)
+            .map(|(mod_key, _, _)| mod_key.clone())
     }
 
-    pub fn add_subnet_from_registration(changeset: SubnetChangeset<T>) -> DispatchResult {
+    pub fn add_subnet_from_registration(
+        changeset: SubnetChangeset<T>,
+        net_key: &T::AccountId,
+    ) -> DispatchResult {
         let num_subnets: u16 = Self::get_total_subnets();
         let max_subnets: u16 = MaxAllowedSubnets::<T>::get();
 
         // RESERVE SUBNET SLOT
         // if we have not reached the max number of subnets, then we can start a new one
-        let target_subnet = if num_subnets >= max_subnets {
-            let lowest_emission_netuid = T::get_lowest_emission_netuid(false);
-            let netuid = lowest_emission_netuid.ok_or(sp_runtime::DispatchError::Other(
-                "No valid netuid to deregister",
+        if num_subnets >= max_subnets {
+            let lowest_emission_net_key = T::get_lowest_emission_net_key(false);
+            let net_key = lowest_emission_net_key.ok_or(sp_runtime::DispatchError::Other(
+                "No valid net_key to deregister",
             ))?;
 
             // if the stake is greater than the least staked network, then we can start a new one
-            Self::remove_subnet(netuid);
-            Some(netuid)
-        } else {
-            None
-        };
+            Self::remove_subnet(net_key);
+        }
 
-        Self::add_subnet(changeset, target_subnet)?;
+        Self::add_subnet(changeset, net_key)?;
         Ok(())
     }
 
@@ -341,17 +335,19 @@ impl<T: Config> Pallet<T> {
     /// 1. If the subnet is minable and at capacity, it replaces the lowest priority node.
     /// 2. If the global module limit is reached, it removes a node from the lowest emission subnet.
     /// 3. Otherwise, it allows the new module to be added.
-    pub fn reserve_module_slot(netuid: u16, key: &T::AccountId) -> DispatchResult {
-        let mineable = T::is_mineable_subnet(netuid);
-        let module_count = || N::<T>::get(netuid);
+    pub fn reserve_module_slot(net_key: &T::AccountId, key: &T::AccountId) -> DispatchResult {
+        let mineable = T::is_mineable_subnet(net_key);
+        let module_count = || N::<T>::get(net_key);
 
-        if mineable && module_count() >= MaxAllowedUids::<T>::get(netuid) {
-            return Self::replace_lowest_priority_node(netuid, false);
+        if mineable && module_count() >= MaxAllowedUids::<T>::get(net_key) {
+            return Self::replace_lowest_priority_node(net_key, false);
         }
 
-        let rootnet_id = T::get_consensus_netuid(SubnetConsensus::Root).unwrap_or(Self::ROOTNET_ID);
-        if netuid == rootnet_id {
-            Self::reserve_rootnet_slot(rootnet_id, key)?;
+        let rootnet_key = T::get_consensus_net_key(SubnetConsensus::Root).unwrap_or(
+            T::AccountId::decode(&mut sp_runtime::traits::TrailingZeroInput::zeroes()).unwrap(),
+        );
+        if *net_key == rootnet_key {
+            Self::reserve_rootnet_slot(&rootnet_key, key)?;
         }
 
         if Self::global_n_modules() >= MaxAllowedModules::<T>::get() {
@@ -361,9 +357,12 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn replace_lowest_priority_node(netuid: u16, ignore_immunity: bool) -> DispatchResult {
-        if let Some(uid) = Self::get_lowest_uid(netuid, ignore_immunity) {
-            Self::remove_module(netuid, uid, false)
+    fn replace_lowest_priority_node(
+        net_key: &T::AccountId,
+        ignore_immunity: bool,
+    ) -> DispatchResult {
+        if let Some(mod_key) = Self::get_lowest_mod_key(net_key, ignore_immunity) {
+            Self::remove_module(net_key, &mod_key, false)
         } else {
             Err(Error::<T>::NetworkIsImmuned.into())
         }
@@ -383,27 +382,22 @@ impl<T: Config> Pallet<T> {
 
     // --- Rootnet utils ---
 
-    fn reserve_rootnet_slot(rootnet_id: u16, key: &T::AccountId) -> DispatchResult {
-        if Uids::<T>::iter_prefix(rootnet_id).count()
-            < MaxAllowedUids::<T>::get(rootnet_id) as usize
+    fn reserve_rootnet_slot(rootnet_key: &T::AccountId, mod_key: &T::AccountId) -> DispatchResult {
+        if NetModules::<T>::get(rootnet_key).len() < MaxAllowedUids::<T>::get(rootnet_key) as usize
         {
             return Ok(());
         }
 
-        let (lower_stake_validator, lower_stake) = Keys::<T>::iter_prefix(rootnet_id)
-            .map(|(_, key)| (key.clone(), Self::get_delegated_stake(&key)))
+        let (lower_stake_validator, lower_stake) = NetModules::<T>::get(rootnet_key)
+            .iter()
+            .map(|key| (key.clone(), Self::get_delegated_stake(&key)))
             .min_by_key(|(_, stake)| *stake)
             .ok_or(Error::<T>::ArithmeticError)?;
 
-        let stake = Self::get_delegated_stake(key);
+        let stake = Self::get_delegated_stake(mod_key);
         ensure!(stake >= lower_stake, Error::<T>::NotEnoughStakeToRegister);
 
-        let lower_stake_validator_uid = Self::get_uid_for_key(rootnet_id, &lower_stake_validator)
-            .ok_or(
-            "selected lowest stake validator does not exist, this is really concerning",
-        )?;
-
-        Self::remove_module(rootnet_id, lower_stake_validator_uid, true)
+        Self::remove_module(rootnet_key, &lower_stake_validator, true)
     }
 
     // --- Registration Burn ---
