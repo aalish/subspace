@@ -11,7 +11,7 @@ use frame_support::{
 
 use frame_system::{self as system, ensure_signed};
 pub use pallet::*;
-use sp_std::collections::btree_set::BTreeSet;
+use sp_std::collections::{btree_map::BTreeMap, btree_set::BTreeSet};
 
 pub use self::{network::subnet, params::global};
 use frame_support::pallet_prelude::Weight;
@@ -102,10 +102,6 @@ pub mod pallet {
         double_maps: {
             Bonds,
             SetWeightCallsPerEpoch,
-            Uids,
-            Keys,
-            Name,
-            Address,
             Metadata,
             RegistrationBlock,
         },
@@ -120,7 +116,6 @@ pub mod pallet {
             Rank,
             Burn,
             MaximumSetWeightCallsPerEpoch,
-            SubnetNames,
             SubnetMetadata,
             N,
             Founder,
@@ -151,7 +146,7 @@ pub mod pallet {
     // --- Module Storage ---
     define_module_includes!(
         // Put here every module-related storage map that has netuid as a key and holds a vector of values. The vector has to be indexed by the module uid.
-        vectors: {
+        btree_maps: {
             Active: bool = false,
             Consensus: u64 = 0,
             Emission: u64 = 0,
@@ -170,15 +165,8 @@ pub mod pallet {
             },
             required: {
                 RegistrationBlock: u64 = Pallet::<T>::get_current_block_number(),
-                Address: Vec<u8> = Vec::<u8>::new(),
-                Name: Vec<u8> = Vec::<u8>::new(),
                 Bonds: Vec<(u16, u16)> = Vec::<(u16, u16)>::new(),
             }
-        },
-        // Specifically for uids and keys
-        key_storages: {
-            uid_key: Uids,
-            key_uid: Keys
         },
         // Put here every module-related double map, that has no uid association. first key is netuid, second key is key of module (not uid!)
         key_only_storages: {
@@ -189,21 +177,31 @@ pub mod pallet {
     );
 
     #[pallet::storage]
-    pub type Bonds<T: Config> =
-        StorageDoubleMap<_, Identity, u16, Identity, u16, Vec<(u16, u16)>, ValueQuery>;
+    pub type Bonds<T: Config> = StorageDoubleMap<
+        _,
+        Identity,
+        T::AccountId,
+        Identity,
+        T::AccountId,
+        Vec<(u16, u16)>,
+        ValueQuery,
+    >;
 
     #[pallet::storage]
-    pub type BondsMovingAverage<T> =
-        StorageMap<_, Identity, u16, u64, ValueQuery, BondsMovingAverageDefaultValue>;
+    pub type BondsMovingAverage<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u64, ValueQuery, BondsMovingAverageDefaultValue>;
 
     #[pallet::storage]
-    pub type ValidatorPermits<T: Config> = StorageMap<_, Identity, u16, Vec<bool>, ValueQuery>;
+    pub type ValidatorPermits<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, bool>, ValueQuery>;
 
     #[pallet::storage]
-    pub type ValidatorTrust<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type ValidatorTrust<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
-    pub type PruningScores<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type PruningScores<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::type_value]
     pub fn DefaultMaxAllowedValidators<T: Config>() -> Option<u16> {
@@ -211,37 +209,43 @@ pub mod pallet {
     }
 
     #[pallet::storage]
-    pub type MaxAllowedValidators<T> =
-        StorageMap<_, Identity, u16, Option<u16>, ValueQuery, DefaultMaxAllowedValidators<T>>;
+    pub type MaxAllowedValidators<T: Config> = StorageMap<
+        _,
+        Identity,
+        T::AccountId,
+        Option<u16>,
+        ValueQuery,
+        DefaultMaxAllowedValidators<T>,
+    >;
 
     #[pallet::storage]
-    pub type Consensus<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type Consensus<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
-    pub type Active<T: Config> = StorageMap<_, Identity, u16, Vec<bool>, ValueQuery>;
+    pub type Active<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, bool>, ValueQuery>;
 
     #[pallet::storage]
-    pub type Rank<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type Rank<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
-    pub type Burn<T: Config> = StorageMap<_, Identity, u16, u64, ValueQuery>;
+    pub type Burn<T: Config> = StorageMap<_, Identity, T::AccountId, u64, ValueQuery>;
 
     #[pallet::storage]
-    pub type MaximumSetWeightCallsPerEpoch<T: Config> = StorageMap<_, Identity, u16, u16>;
+    pub type MaximumSetWeightCallsPerEpoch<T: Config> = StorageMap<_, Identity, T::AccountId, u16>;
 
     #[pallet::storage]
     pub type SetWeightCallsPerEpoch<T: Config> =
-        StorageDoubleMap<_, Identity, u16, Identity, T::AccountId, u16, ValueQuery>;
-
-    #[pallet::storage]
-    pub type SubnetNames<T: Config> = StorageMap<_, Identity, u16, Vec<u8>, ValueQuery>;
+        StorageDoubleMap<_, Identity, T::AccountId, Identity, T::AccountId, u16, ValueQuery>;
 
     #[pallet::storage]
     pub type SubnetMetadata<T: Config> =
-        StorageMap<_, Identity, u16, BoundedVec<u8, ConstU32<120>>>;
+        StorageMap<_, Identity, T::AccountId, BoundedVec<u8, ConstU32<1024>>>;
 
     #[pallet::storage]
-    pub type N<T> = StorageMap<_, Identity, u16, u16, ValueQuery>;
+    pub type N<T: Config> = StorageMap<_, Identity, T::AccountId, u16, ValueQuery>;
 
     #[pallet::type_value]
     pub fn DefaultKey<T: Config>() -> T::AccountId {
@@ -250,110 +254,108 @@ pub mod pallet {
 
     #[pallet::storage]
     pub type Founder<T: Config> =
-        StorageMap<_, Identity, u16, T::AccountId, ValueQuery, DefaultKey<T>>;
+        StorageMap<_, Identity, T::AccountId, T::AccountId, ValueQuery, DefaultKey<T>>;
 
     #[pallet::storage]
     pub type IncentiveRatio<T: Config> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, IncentiveRatioDefaultValue>;
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, IncentiveRatioDefaultValue>;
 
     #[pallet::storage]
     pub type ModuleBurnConfig<T: Config> =
-        StorageMap<_, Identity, u16, GeneralBurnConfiguration<T>, ValueQuery>;
+        StorageMap<_, Identity, T::AccountId, GeneralBurnConfiguration<T>, ValueQuery>;
 
     #[pallet::storage]
-    pub type RegistrationsThisInterval<T: Config> = StorageMap<_, Identity, u16, u16, ValueQuery>;
+    pub type RegistrationsThisInterval<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery>;
 
     #[pallet::storage]
-    pub type MaxEncryptionPeriod<T: Config> = StorageMap<_, Identity, u16, Option<u64>, ValueQuery>;
+    pub type MaxEncryptionPeriod<T: Config> =
+        StorageMap<_, Identity, T::AccountId, Option<u64>, ValueQuery>;
 
     #[pallet::storage]
     pub type CopierMargin<T: Config> =
-        StorageMap<_, Identity, u16, I64F64, ValueQuery, CopierMarginDefaultValue>;
+        StorageMap<_, Identity, T::AccountId, I64F64, ValueQuery, CopierMarginDefaultValue>;
 
     #[pallet::storage]
-    pub type UseWeightsEncryption<T: Config> = StorageMap<_, Identity, u16, bool, ValueQuery>;
+    pub type UseWeightsEncryption<T: Config> =
+        StorageMap<_, Identity, T::AccountId, bool, ValueQuery>;
 
     #[pallet::storage]
     pub type AlphaValues<T: Config> =
-        StorageMap<_, Identity, u16, (u16, u16), ValueQuery, AlphaValuesDefaultValue>;
+        StorageMap<_, Identity, T::AccountId, (u16, u16), ValueQuery, AlphaValuesDefaultValue>;
 
     #[pallet::storage]
     pub type MinValidatorStake<T: Config> =
-        StorageMap<_, Identity, u16, u64, ValueQuery, T::DefaultMinValidatorStake>;
+        StorageMap<_, Identity, T::AccountId, u64, ValueQuery, T::DefaultMinValidatorStake>;
 
     #[pallet::storage]
-    pub type MaxAllowedUids<T> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, MaxAllowedUidsDefaultValue>;
+    pub type MaxAllowedUids<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, MaxAllowedUidsDefaultValue>;
 
     #[pallet::storage]
-    pub type ImmunityPeriod<T> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, ImmunityPeriodDefaultValue>;
+    pub type ImmunityPeriod<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, ImmunityPeriodDefaultValue>;
 
     #[pallet::storage]
-    pub type MinAllowedWeights<T> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, MinAllowedWeightsDefaultValue>;
+    pub type MinAllowedWeights<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, MinAllowedWeightsDefaultValue>;
 
     #[pallet::storage]
-    pub type MaxWeightAge<T> =
-        StorageMap<_, Identity, u16, u64, ValueQuery, MaxWeightAgeDefaultValue>;
+    pub type MaxWeightAge<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u64, ValueQuery, MaxWeightAgeDefaultValue>;
 
     #[pallet::storage]
-    pub type MaxAllowedWeights<T> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, MaxAllowedWeightsDefaultValue>;
+    pub type MaxAllowedWeights<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, MaxAllowedWeightsDefaultValue>;
 
     #[pallet::storage]
-    pub type Tempo<T> = StorageMap<_, Identity, u16, u16, ValueQuery, TempoDefaultValue>;
+    pub type Tempo<T: Config> =
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, TempoDefaultValue>;
 
     #[pallet::storage]
     pub type FounderShare<T: Config> =
-        StorageMap<_, Identity, u16, u16, ValueQuery, DefaultFounderShare<T>>;
+        StorageMap<_, Identity, T::AccountId, u16, ValueQuery, DefaultFounderShare<T>>;
+
+    #[pallet::storage]
+    pub type NetModules<T: Config> =
+        StorageMap<_, Identity, T::AccountId, Vec<T::AccountId>, ValueQuery>;
 
     // --- Module ---
 
     #[pallet::storage]
-    pub type Uids<T: Config> =
-        StorageDoubleMap<_, Identity, u16, Blake2_128Concat, T::AccountId, u16>;
-
-    #[pallet::storage]
-    pub type Keys<T: Config> = StorageDoubleMap<_, Identity, u16, Identity, u16, T::AccountId>;
-
-    #[pallet::storage]
-    pub type Name<T: Config> =
-        StorageDoubleMap<_, Twox64Concat, u16, Twox64Concat, u16, Vec<u8>, ValueQuery>;
-
-    #[pallet::storage]
-    pub type Address<T: Config> =
-        StorageDoubleMap<_, Twox64Concat, u16, Twox64Concat, u16, Vec<u8>, ValueQuery>;
-
-    #[pallet::storage]
     pub type Metadata<T: Config> =
-        StorageDoubleMap<_, Twox64Concat, u16, Twox64Concat, T::AccountId, Vec<u8>>;
+        StorageDoubleMap<_, Twox64Concat, T::AccountId, Twox64Concat, T::AccountId, Vec<u8>>;
 
     #[pallet::storage]
     #[pallet::getter(fn get_incentive_for)]
-    pub type Incentive<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type Incentive<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
-    pub type Trust<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type Trust<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn get_dividends_for)]
-    pub type Dividends<T: Config> = StorageMap<_, Identity, u16, Vec<u16>, ValueQuery>;
+    pub type Dividends<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u16>, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn get_emission_for)]
-    pub type Emission<T: Config> = StorageMap<_, Identity, u16, Vec<u64>, ValueQuery>;
+    pub type Emission<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u64>, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn get_last_update_for)]
-    pub type LastUpdate<T: Config> = StorageMap<_, Identity, u16, Vec<u64>, ValueQuery>;
+    pub type LastUpdate<T: Config> =
+        StorageMap<_, Identity, T::AccountId, BTreeMap<T::AccountId, u64>, ValueQuery>;
 
     #[pallet::storage]
-    pub type SubnetRegistrationBlock<T: Config> = StorageMap<_, Identity, u16, u64>;
+    pub type SubnetRegistrationBlock<T: Config> = StorageMap<_, Identity, T::AccountId, u64>;
 
     #[pallet::storage]
     pub type RegistrationBlock<T: Config> =
-        StorageDoubleMap<_, Identity, u16, Identity, u16, u64, ValueQuery>;
+        StorageDoubleMap<_, Identity, T::AccountId, Identity, T::AccountId, u64, ValueQuery>;
 
     // --- Rootnet ---
 
@@ -467,7 +469,7 @@ pub mod pallet {
     /// Control delegation per account
     #[pallet::storage]
     pub type WeightSettingDelegation<T: Config> =
-        StorageDoubleMap<_, Identity, u16, Identity, T::AccountId, T::AccountId>;
+        StorageDoubleMap<_, Identity, T::AccountId, Identity, T::AccountId, T::AccountId>;
 
     #[pallet::storage]
     pub type Bridged<T: Config> = StorageMap<_, Identity, T::AccountId, u64, ValueQuery>;

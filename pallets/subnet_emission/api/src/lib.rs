@@ -20,17 +20,17 @@ pub enum SubnetConsensus {
 pub type SubnetWeights = Vec<(u16, Vec<(u16, u16)>)>;
 
 pub trait SubnetEmissionApi<AccountId> {
-    fn get_lowest_emission_netuid(ignore_subnet_immunity: bool) -> Option<u16>;
+    fn get_lowest_emission_net_key(ignore_subnet_immunity: bool) -> Option<T::AccountId>;
 
     fn set_subnet_emission_storage(netuid: u16, emission: u64);
 
-    fn create_yuma_subnet(netuid: u16);
+    fn create_yuma_subnet(net_key: &AccountId);
 
     fn can_remove_subnet(netuid: u16) -> bool;
 
-    fn is_mineable_subnet(netuid: u16) -> bool;
+    fn is_mineable_subnet(net_key: &AccountId) -> bool;
 
-    fn get_consensus_netuid(subnet_consensus: SubnetConsensus) -> Option<u16>;
+    fn get_consensus_net_key(subnet_consensus: SubnetConsensus) -> Option<AccountId>;
 
     fn get_subnet_consensus_type(netuid: u16) -> Option<SubnetConsensus>;
 

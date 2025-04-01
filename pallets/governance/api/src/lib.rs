@@ -44,7 +44,7 @@ pub trait GovernanceApi<AccountId> {
     fn get_global_governance_configuration() -> GovernanceConfiguration;
 
     /// Gets the governance configuration for a given subnet.
-    fn get_subnet_governance_configuration(subnet_id: u16) -> GovernanceConfiguration;
+    fn get_subnet_governance_configuration(net_key: &AccountId) -> GovernanceConfiguration;
 
     /// Updates the governance configuration of the global network if in authority mode.
     fn update_global_governance_configuration(
@@ -53,7 +53,7 @@ pub trait GovernanceApi<AccountId> {
 
     /// Updates the governance configuration of a subnet in authority mode.
     fn update_subnet_governance_configuration(
-        subnet_id: u16,
+        net_key: &AccountId,
         governance_config: GovernanceConfiguration,
     ) -> DispatchResult;
 

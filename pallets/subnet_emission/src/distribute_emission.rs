@@ -336,18 +336,18 @@ impl<T: Config> Pallet<T> {
     }
 
     // Subnet is minable, if it's consensus isn't root or treasury
-    pub fn is_mineable_subnet(netuid: u16) -> bool {
+    pub fn is_mineable_subnet(net_key: &T::AccountId) -> bool {
         matches!(
-            SubnetConsensusType::<T>::get(netuid),
+            SubnetConsensusType::<T>::get(net_key),
             Some(SubnetConsensus::Linear) | Some(SubnetConsensus::Yuma)
         )
     }
 
     // Gets consensus running id by iterating through consensus, until we find root consensus
-    pub fn get_consensus_netuid(subnet_consensus: SubnetConsensus) -> Option<u16> {
-        SubnetConsensusType::<T>::iter().find_map(|(netuid, consensus)| {
+    pub fn get_consensus_net_key(subnet_consensus: SubnetConsensus) -> Option<T::AccountId> {
+        SubnetConsensusType::<T>::iter().find_map(|(net_key, consensus)| {
             if consensus == subnet_consensus {
-                Some(netuid)
+                Some(net_key)
             } else {
                 None
             }

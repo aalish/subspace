@@ -8,32 +8,26 @@ use substrate_fixed::types::I64F64;
 impl<T: Config> Pallet<T> {
     pub fn add_subnet(
         changeset: SubnetChangeset<T>,
-        netuid: Option<u16>,
-    ) -> Result<u16, DispatchError> {
-        let netuid = netuid.unwrap_or_else(|| match SubnetGaps::<T>::get().first().copied() {
-            Some(removed) => removed,
-            None => Self::get_total_subnets(),
-        });
-
-        let name = changeset.params().name.clone();
-        changeset.apply(netuid)?;
-        N::<T>::insert(netuid, 0);
-        T::set_subnet_emission_storage(netuid, 0);
+        net_key: &T::AccountId,
+    ) -> Result<T::AccountId, DispatchError> {
+        changeset.apply(net_key)?;
+        N::<T>::insert(net_key, 0);
+        T::set_subnet_emission_storage(net_key, 0);
         SubnetRegistrationsThisInterval::<T>::mutate(|value| *value = value.saturating_add(1));
-        SubnetRegistrationBlock::<T>::set(netuid, Some(Self::get_current_block_number()));
+        SubnetRegistrationBlock::<T>::set(net_key, Some(Self::get_current_block_number()));
 
-        // Insert the minimum burn to the netuid,
+        // Insert the minimum burn to the net_key,
         // to prevent free registrations the first target registration interval.
         let min_burn = GeneralBurnConfiguration::<T>::default_for(BurnType::Module).min_burn;
-        Burn::<T>::set(netuid, min_burn);
+        Burn::<T>::set(net_key, min_burn);
 
-        SubnetGaps::<T>::mutate(|subnets| subnets.remove(&netuid));
-        T::create_yuma_subnet(netuid);
+        SubnetGaps::<T>::mutate(|subnets| subnets.remove(&net_key));
+        T::create_yuma_subnet(net_key);
 
         // --- 6. Emit the new network event.
-        Self::deposit_event(Event::NetworkAdded(netuid, name.into_inner()));
+        Self::deposit_event(Event::NetworkAdded(net_key.clone()));
 
-        Ok(netuid)
+        Ok(net_key.clone())
     }
 
     fn clear_subnet_includes(netuid: u16) {
@@ -64,7 +58,7 @@ impl<T: Config> Pallet<T> {
             });
     }
 
-    pub fn remove_subnet(netuid: u16) {
+    pub fn remove_subnet(net_key: &T::AccountId) {
         if !Self::if_subnet_exist(netuid) {
             return;
         }
@@ -119,10 +113,10 @@ impl<T: Config> Pallet<T> {
 
     // --- Setters ---
 
-    pub fn set_max_allowed_uids(netuid: u16, max_allowed_uids: u16) -> DispatchResult {
-        let n: u16 = N::<T>::get(netuid);
+    pub fn set_max_allowed_uids(net_key: &T::AccountId, max_allowed_uids: u16) -> DispatchResult {
+        let n: u16 = N::<T>::get(net_key);
         ensure!(n <= max_allowed_uids, Error::<T>::InvalidMaxAllowedUids);
-        MaxAllowedUids::<T>::insert(netuid, max_allowed_uids);
+        MaxAllowedUids::<T>::insert(net_key, max_allowed_uids);
         Ok(())
     }
 
@@ -153,6 +147,10 @@ impl<T: Config> Pallet<T> {
 
     pub fn get_netuid_for_name(name: &[u8]) -> Option<u16> {
         SubnetNames::<T>::iter().find(|(_, n)| n == name).map(|(id, _)| id)
+    }
+
+    pub fn check_net_key(_key: &T::AccountId) -> bool {
+        false
     }
     /// Returs the key under the network uid as a Result. Ok if the uid is taken.
     #[inline]
@@ -228,13 +226,12 @@ impl<T: Config> Pallet<T> {
         }
     }
 
-    pub fn if_subnet_exist(netuid: u16) -> bool {
-        N::<T>::contains_key(netuid)
+    pub fn if_subnet_exist(net_key: &T::AccountId) -> bool {
+        N::<T>::contains_key(net_key)
     }
 
-    pub fn key_registered(netuid: u16, key: &T::AccountId) -> bool {
-        Uids::<T>::contains_key(netuid, key)
-            || Keys::<T>::iter_prefix_values(netuid).any(|k| &k == key)
+    pub fn key_registered(net_key: &T::AccountId, key: &T::AccountId) -> bool {
+        NetModules::<T>::get(net_key).contains(key)
     }
 
     pub fn get_total_subnets() -> u16 {

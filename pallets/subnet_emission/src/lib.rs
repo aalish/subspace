@@ -159,7 +159,8 @@ pub mod pallet {
     pub type SubnetDecryptionData<T> = StorageMap<_, Identity, u16, SubnetDecryptionInfo<T>>;
 
     #[pallet::storage]
-    pub type SubnetConsensusType<T> = StorageMap<_, Identity, u16, SubnetConsensus>;
+    pub type SubnetConsensusType<T: Config> =
+        StorageMap<_, Identity, T::AccountId, SubnetConsensus>;
 
     /// Netuid, to block number to consensus parameters
     #[pallet::storage]

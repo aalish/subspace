@@ -63,16 +63,16 @@ macro_rules! define_subnet_includes {
         }
 
         impl SubnetIncludes {
-            pub fn remove_storage<T: pallet::Config>(self, netuid: u16) {
+            pub fn remove_storage<T: pallet::Config>(self, net_key: T::AccountId) {
                 match self {
                     $(
                         Self::$d_variant => {
-                            let _ = $d_variant::<T>::clear_prefix(netuid, u32::MAX, None);
+                            let _ = $d_variant::<T>::clear_prefix(net_key, u32::MAX, None);
                         }
                     )*
                     $(
                         Self::$m_variant => {
-                            $m_variant::<T>::remove(netuid);
+                            $m_variant::<T>::remove(net_key);
                         }
                     )*
                 }
@@ -139,8 +139,8 @@ macro_rules! define_subnet_includes {
 #[macro_export]
 macro_rules! define_module_includes {
     (
-        vectors: {
-            $( $vec:ident $(: $vec_type:ty = $vec_default:expr)? ),* $(,)?
+        btree_maps: {
+            $( $map:ident $(: $map_type:ty = $map_default:expr)? ),* $(,)?
         },
         swap_storages: {
             optional: {
@@ -150,34 +150,26 @@ macro_rules! define_module_includes {
                 $( $req_swap:ident $(: $req_type:ty = $req_default:expr)? ),* $(,)?
             }
         },
-        key_storages: {
-            $( uid_key: $uid_storage:ident, )?
-            $( key_uid: $key_storage:ident )?
-        },
         key_only_storages: {
             $( $key_only:ident $(: $key_only_type:ty)? ),* $(,)?
         }
     ) => {
         #[allow(dead_code)]
         #[derive(strum::EnumIter)]
-        pub enum ModuleVectors {
-            $($vec,)*
+        pub enum ModuleBTreeMaps {
+            $($map,)*
         }
 
         #[allow(dead_code)]
-        impl ModuleVectors {
-            pub fn swap_and_remove<T: Config>(self, netuid: u16, uid: u16, replace_uid: u16) -> DispatchResult {
+        impl ModuleBTreeMaps {
+            pub fn remove<T: Config>(self, net_key: &T::AccountId, mod_key: &T::AccountId) -> DispatchResult {
                 match self {
                     $(
-                        Self::$vec => {
-                            let mut vec = $vec::<T>::get(netuid);
-                            if let (Some(replace_value), Some(entry)) = (
-                                vec.get(replace_uid as usize).copied(),
-                                vec.get_mut(uid as usize)
-                            ) {
-                                *entry = replace_value;
-                                vec.pop();
-                                $vec::<T>::insert(netuid, vec);
+                        Self::$map => {
+                            let mut map = $map::<T>::get(net_key);
+                            if let Some(_) = map.get(mod_key) {
+                                map.remove(mod_key);
+                                $map::<T>::insert(net_key, map);
                             };
                             Ok(())
                         },
@@ -185,15 +177,15 @@ macro_rules! define_module_includes {
                 }
             }
 
-            pub fn append<T: Config>(self, netuid: u16) -> DispatchResult {
+            pub fn append<T: Config>(self, net_key: &T::AccountId) -> DispatchResult {
                 match self {
                     $(
-                        Self::$vec => {
-                            let mut vec = $vec::<T>::get(netuid);
-                            $(
-                                vec.push($vec_default);
-                            )?
-                            $vec::<T>::insert(netuid, vec);
+                        Self::$map => {
+                            let map = $map::<T>::get(net_key);
+                            // $(
+                            //     map.push($map_default);
+                            // )?
+                            $map::<T>::insert(net_key, map);
                             Ok(())
                         },
                     )*
@@ -215,22 +207,20 @@ macro_rules! define_module_includes {
 
         #[allow(dead_code)]
         impl ModuleSwapStorages {
-            pub fn swap_and_remove<T: Config>(self, netuid: u16, uid: u16, replace_uid: u16) -> DispatchResult {
+            pub fn remove<T: Config>(self, net_key: &T::AccountId, mod_key: &T::AccountId) -> DispatchResult {
                 match self {
                     $(
                         Self::$opt_swap => {
-                            if let Some(value) = $opt_swap::<T>::get(netuid, replace_uid) {
-                                $opt_swap::<T>::insert(netuid, uid, value);
-                                $opt_swap::<T>::remove(netuid, replace_uid);
+                            if let Some(_) = $opt_swap::<T>::get(net_key, mod_key) {
+                                $opt_swap::<T>::remove(net_key, mod_key);
                             }
                             Ok(())
                         },
                     )*
                     $(
                         Self::$req_swap => {
-                            if let Ok(value) = $req_swap::<T>::try_get(netuid, replace_uid) {
-                                $req_swap::<T>::insert(netuid, uid, value);
-                                $req_swap::<T>::remove(netuid, replace_uid);
+                            if let Ok(_) = $req_swap::<T>::try_get(net_key, mod_key) {
+                                $req_swap::<T>::remove(net_key, mod_key);
                             }
                             Ok(())
                         },
@@ -238,17 +228,17 @@ macro_rules! define_module_includes {
                 }
             }
 
-            pub fn initialize<T: Config>(self, netuid: u16, uid: u16) -> DispatchResult {
+            pub fn initialize<T: Config>(self, net_key: &T::AccountId, mod_key: &T::AccountId) -> DispatchResult {
                 match self {
                     $(
                         Self::$opt_swap => {
-                            $($opt_swap::<T>::insert(netuid, uid, $opt_default);)?
+                            $($opt_swap::<T>::insert(net_key, mod_key, $opt_default);)?
                             Ok(())
                         },
                     )*
                     $(
                         Self::$req_swap => {
-                            $($req_swap::<T>::insert(netuid, uid, $req_default);)?
+                            $($req_swap::<T>::insert(net_key, mod_key, $req_default);)?
                             Ok(())
                         },
                     )*
@@ -269,11 +259,11 @@ macro_rules! define_module_includes {
 
         #[allow(dead_code)]
         impl ModuleKeyOnlyStorages {
-            pub fn remove<T: Config>(self, netuid: u16, key: &T::AccountId) -> DispatchResult {
+            pub fn remove<T: Config>(self, net_key: &T::AccountId, mod_key: &T::AccountId) -> DispatchResult {
                 match self {
                     $(
                         Self::$key_only => {
-                            $key_only::<T>::remove(netuid, key);
+                            $key_only::<T>::remove(net_key, mod_key);
                             Ok(())
                         },
                     )*
@@ -292,54 +282,34 @@ macro_rules! define_module_includes {
         #[allow(dead_code)]
         impl StorageHandler {
             pub fn remove_all<T: Config>(
-                netuid: u16,
-                uid: u16,
-                replace_uid: u16,
-                module_key: &T::AccountId,
-                replace_key: &T::AccountId,
+                net_key: &T::AccountId,
+                mod_key: &T::AccountId,
             ) -> DispatchResult {
-                $(
-                    $uid_storage::<T>::insert(netuid, replace_key, uid);
-                    $uid_storage::<T>::remove(netuid, module_key);
-                )?
-                $(
-                    $key_storage::<T>::insert(netuid, uid, replace_key.clone());
-                    $key_storage::<T>::remove(netuid, replace_uid);
-                )?
-
                 for storage in ModuleKeyOnlyStorages::all() {
-                    storage.remove::<T>(netuid, module_key)?;
+                    storage.remove::<T>(net_key, mod_key)?;
                 }
 
-                for vector in ModuleVectors::all() {
-                    vector.swap_and_remove::<T>(netuid, uid, replace_uid)?;
+                for map in ModuleBTreeMaps::all() {
+                    map.remove::<T>(net_key, mod_key)?;
                 }
 
                 for storage in ModuleSwapStorages::all() {
-                    storage.swap_and_remove::<T>(netuid, uid, replace_uid)?;
+                    storage.remove::<T>(net_key, mod_key)?;
                 }
 
                 Ok(())
             }
 
             pub fn initialize_all<T: Config>(
-                netuid: u16,
-                uid: u16,
-                key: &T::AccountId,
+                net_key: &T::AccountId,
+                mod_key: &T::AccountId,
             ) -> DispatchResult {
-                $(
-                    $uid_storage::<T>::insert(netuid, key, uid);
-                )?
-                $(
-                    $key_storage::<T>::insert(netuid, uid, key.clone());
-                )?
-
                 for storage in ModuleSwapStorages::all() {
-                    storage.initialize::<T>(netuid, uid)?;
+                    storage.initialize::<T>(net_key, mod_key)?;
                 }
 
-                for vector in ModuleVectors::all() {
-                    vector.append::<T>(netuid)?;
+                for map in ModuleBTreeMaps::all() {
+                    map.append::<T>(net_key)?;
                 }
 
                 Ok(())
